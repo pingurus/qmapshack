@@ -21,6 +21,7 @@
 #include "CMainWindow.h"
 #include "gis/CGisDraw.h"
 #include "gis/IGisLine.h"
+#include "gis/rte/router/CRouterOptimization.h"
 #include "gis/trk/CGisItemTrk.h"
 #include "GeoMath.h"
 #include "helpers/CDraw.h"
@@ -114,6 +115,7 @@ void IMouseEditLine::commonSetup()
     connect(scrOptEditLine->toolAutoRoute,   &QPushButton::clicked, this, &IMouseEditLine::slotAutoRouting  );
     connect(scrOptEditLine->toolVectorRoute, &QPushButton::clicked, this, &IMouseEditLine::slotVectorRouting);
     connect(scrOptEditLine->toolTrackRoute,  &QPushButton::clicked, this, &IMouseEditLine::slotTrackRouting );
+    connect(scrOptEditLine->pushOptimize,    &QPushButton::clicked, this, &IMouseEditLine::slotOptimize     );
 
     connect(scrOptEditLine->toolUndo,        &QPushButton::clicked, this, &IMouseEditLine::slotUndo         );
     connect(scrOptEditLine->toolRedo,        &QPushButton::clicked, this, &IMouseEditLine::slotRedo         );
@@ -348,6 +350,35 @@ void IMouseEditLine::slotTrackRouting()
 {
     canvas->reportStatus(key.item, tr("<b>Track Routing</b><br/>Connect points with a line from a loaded track if possible.<br/>"));
     canvas->reportStatus("Routino", QString());
+}
+
+void IMouseEditLine::slotOptimize()
+{
+    canvas->reportStatus(key.item, tr("<b>Started Optimization.</b><br/>"));
+    int response = 0;
+    try
+    {
+        response = optimizer.optimize(points);
+    }
+    catch(const QString &msg)
+    {
+        response = -1;
+        lineOp->showRoutingErrorMessage(msg);
+    }
+
+    if(response == -1)
+    {
+        canvas->reportStatus(key.item, tr("<b>Optimization failed.</b><br/><b>Note:</b> The selected router must be able to route on-the-fly. Offline routers usually can do, online routers can't.<br/>"));
+    }
+    else
+    {
+        canvas->reportStatus(key.item, tr("<b>Optimization successful.</b><br/>"));
+
+        points.updatePixel(gis);
+
+        storeToHistory(points);
+        canvas->slotTriggerCompleteUpdate(CCanvas::eRedrawMouse);
+    }
 }
 
 void IMouseEditLine::changeCursor()
