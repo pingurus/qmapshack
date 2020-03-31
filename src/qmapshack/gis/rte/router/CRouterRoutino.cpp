@@ -379,7 +379,7 @@ void CRouterRoutino::calcRoute(const IGisItem::key_t& key)
 }
 
 
-int CRouterRoutino::calcRoute(const QPointF& p1, const QPointF& p2, QPolygonF& coords)
+int CRouterRoutino::calcRoute(const QPointF& p1, const QPointF& p2, QPolygonF& coords, qreal* costs = nullptr)
 {
     if(!mutex.tryLock())
     {
@@ -443,6 +443,20 @@ int CRouterRoutino::calcRoute(const QPointF& p1, const QPointF& p2, QPolygonF& c
                 if(next->type != ROUTINO_POINT_WAYPOINT)
                 {
                     coords << QPointF(next->lon, next->lat);
+                }
+                if(costs != nullptr)
+                {
+                    if(comboMode->currentIndex() == 0)
+                    {
+                        // ROUTINO_ROUTE_SHORTEST
+                        *costs = next->dist;
+                    }
+                    else if(comboMode->currentIndex() == 1)
+                    {
+                        // ROUTINO_ROUTE_QUICKEST
+                        // This works, since CRouteOptimization adapts it's weights according to the data it gets
+                        *costs = next->time;
+                    }
                 }
                 next = next->next;
             }

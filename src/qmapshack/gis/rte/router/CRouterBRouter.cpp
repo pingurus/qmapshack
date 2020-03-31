@@ -323,7 +323,7 @@ QNetworkRequest CRouterBRouter::getRequest(const QVector<QPointF> &routePoints, 
     return QNetworkRequest(url);
 }
 
-int CRouterBRouter::calcRoute(const QPointF& p1, const QPointF& p2, QPolygonF& coords)
+int CRouterBRouter::calcRoute(const QPointF& p1, const QPointF& p2, QPolygonF& coords, qreal *costs)
 {
     if(!hasFastRouting())
     {
@@ -335,10 +335,10 @@ int CRouterBRouter::calcRoute(const QPointF& p1, const QPointF& p2, QPolygonF& c
     QList<IGisItem*> nogos;
     CGisWorkspace::self().getNogoAreas(nogos);
 
-    return synchronousRequest(points, nogos, coords);
+    return synchronousRequest(points, nogos, coords, costs);
 }
 
-int CRouterBRouter::synchronousRequest(const QVector<QPointF> &points, const QList<IGisItem *> &nogos, QPolygonF &coords)
+int CRouterBRouter::synchronousRequest(const QVector<QPointF> &points, const QList<IGisItem *> &nogos, QPolygonF &coords, qreal* costs = nullptr)
 {
     if (!mutex.tryLock())
     {
@@ -412,6 +412,33 @@ int CRouterBRouter::synchronousRequest(const QVector<QPointF> &points, const QLi
                         QPointF &point = coords.last();
                         point.setX(elem.attribute("lon").toFloat()*DEG_TO_RAD);
                         point.setY(elem.attribute("lat").toFloat()*DEG_TO_RAD);
+                    }
+
+                    //find costs of route (copied and adapted from CGisItemRte::setResultFromBrouter)
+                    if(costs != nullptr)
+                    {
+                        const QDomNodeList &nodes = xml.childNodes();
+                        for (int i = 0; i < nodes.count(); i++)
+                        {
+                            const QDomNode &node = nodes.at(i);
+                            if (node.isComment())
+                            {
+                                const QString &commentTxt = node.toComment().data();
+                                // ' track-length = 180864 filtered ascend = 428 plain-ascend = -172 cost=270249 '
+                                const QRegExp rxAscDes("(\\s*track-length\\s*=\\s*)(-?\\d+)(\\s*)(filtered ascend\\s*=\\s*-?\\d+)(\\s*)(plain-ascend\\s*=\\s*-?\\d+)(\\s*)(cost\\s*=\\s*)(-?\\d+)(\\s*)");
+                                int pos = rxAscDes.indexIn(commentTxt);
+                                if (pos > -1)
+                                {
+                                    bool ok;
+                                    *costs = rxAscDes.cap(9).toDouble(&ok);
+                                    if(!ok)
+                                    {
+                                        *costs = -1;
+                                    }
+                                }
+                                break;
+                            }
+                        }
                     }
                 }
             }
