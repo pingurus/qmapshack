@@ -35,6 +35,7 @@ public:
 
     void calcRoute(const IGisItem::key_t &key);
     int calcRoute(const QPointF& p1, const QPointF& p2, QPolygonF& coords, qreal *costs = nullptr);
+    int calcRoute(const QVector<QPointF>& points, QVector<QPolygonF>& coords, QVector<qreal>&costs);
     QString getOptions();
 
     bool hasFastRouting();

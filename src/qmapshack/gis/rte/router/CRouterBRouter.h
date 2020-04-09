@@ -48,6 +48,7 @@ public:
 
     void calcRoute(const IGisItem::key_t& key) override;
     int calcRoute(const QPointF& p1, const QPointF& p2, QPolygonF& coords, qreal* costs = nullptr) override;
+    int calcRoute(const QVector<QPointF>& points, QVector<QPolygonF>& coords, QVector<qreal>&costs) override;
     bool hasFastRouting() override;
     QString getOptions() override;
     void routerSelected() override;
@@ -70,12 +71,20 @@ private slots:
 
 private:
 
+    enum brouter_formats_e
+    {
+        eBrouterFormatGpx,
+        eBrouterFormatGeoJson
+    };
+
     void updateDialog() const;
     void getBRouterVersion();
     bool isMinimumVersion(int major, int minor, int patch) const;
     void updateBRouterStatus() const;
-    int synchronousRequest(const QVector<QPointF>& points, const QList<IGisItem *> &nogos, QPolygonF &coords, qreal *costs);
-    QNetworkRequest getRequest(const QVector<QPointF>& routePoints, const QList<IGisItem *> &nogos) const;
+    int synchronousRequest(const QVector<QPointF>&points, const QList<IGisItem *> &nogos, QByteArray & response, brouter_formats_e = eBrouterFormatGpx);
+    int synchronousRequest(const QVector<QPointF> &points, const QList<IGisItem *> &nogos, QPolygonF &coords, qreal* costs = nullptr);
+    int synchronousRequest(const QVector<QPointF> &points, const QList<IGisItem *> &nogos, QVector<QPolygonF> &coords, QVector<qreal> &costs);
+    QNetworkRequest getRequest(const QVector<QPointF>& routePoints, const QList<IGisItem *> &nogos, brouter_formats_e format = eBrouterFormatGpx) const;
     QUrl getServiceUrl() const;
 
     CRouterBRouterLocal * localBRouter;

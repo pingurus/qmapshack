@@ -28,3 +28,20 @@ IRouter::~IRouter()
 {
 }
 
+int IRouter::calcRoute(const QVector<QPointF> &points, QVector<QPolygonF> &coords, QVector<qreal> &costs)
+{
+    //Dummy implementation for cases where there is no gain
+    for(int i = 0; i < points.length()-1; i++)
+    {
+        QPolygonF poly;
+        qreal cost;
+        if(calcRoute(points[i], points[i+1], poly, &cost) == -1)
+        {
+            return -1;
+        }
+        coords.append(poly);
+        costs.append(costs);
+    }
+    return coords.length();
+}
+

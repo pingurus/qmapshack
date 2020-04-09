@@ -211,6 +211,7 @@ qreal CRouterOptimization::createNextBestOrder(const SGisLine &oldOrder, SGisLin
 
 qreal CRouterOptimization::getRealRouteCosts(const SGisLine &line)
 {
+    fastLoadToCache(line);
     qreal costs = 0;
     for(int i = 0; i < line.length()-1; i++)
     {
@@ -242,7 +243,67 @@ qreal CRouterOptimization::bestKnownDistance(const IGisLine::point_t& start, con
     else
     {
         //Multiply it with the average of the minimum occuring factor and the average factor, to get a reasonable compromise of optimization speed and optimality of results
-        return GPS_Math_DistanceQuick(start.coord.x(), end.coord.x(), start.coord.y(), end.coord.y()) * (totalAirToCosts/totalNumOfRoutes + minAirToCostFactor)/2;
+        return GPS_Math_DistanceQuick(start.coord.x(), start.coord.y(), end.coord.x(), end.coord.y()) * (totalAirToCosts/totalNumOfRoutes + minAirToCostFactor)/2;
+    }
+}
+
+void CRouterOptimization::fastLoadToCache(const SGisLine &line)
+{
+    QVector<QPointF> points;
+    bool endOfSection = false;
+    for(int i = 0; i < line.length(); i++)
+    {
+        if(i < line.length()-1)
+        {
+            QString start_key=QString::number(line[i].coord.x(), 'e', 10) + QString::number(line[i].coord.y(), 'e', 10);
+            QString end_key=QString::number(line[i+1].coord.x(), 'e', 10) + QString::number(line[i+1].coord.y(), 'e', 10);
+
+            if(!routingCache.contains(start_key) || !routingCache[start_key].contains(end_key))
+            {
+                if(points.isEmpty())
+                {
+                    points.append(line[i].coord);
+                }
+                points.append(line[i+1].coord);
+            }
+            else
+            {
+                endOfSection = true;
+            }
+        }
+
+        //Only do if there is more than one segment to avoid the overhead of regexing over the output, although that overhead is just a guess
+        if(points.length() > 2 && (i == line.length()-1 || endOfSection))
+        {
+            QVector<QPolygonF> polygons;
+            QVector<qreal> costs;
+            if(CRouterSetup::self().calcRoute(points, polygons, costs) <= 0)
+            {
+                return;
+            }
+
+            for(int i = 0; i < points.length()-1; i++)
+            {
+                QString start_key=QString::number(line[i].coord.x(), 'e', 10) + QString::number(line[i].coord.y(), 'e', 10);
+                QString end_key=QString::number(line[i+1].coord.x(), 'e', 10) + QString::number(line[i+1].coord.y(), 'e', 10);
+
+                if(!routingCache.contains(start_key))
+                {
+                    routingCache[start_key] = QMap<QString, routing_cache_item_t>();
+                }
+                /*
+                   //For debugging double check
+                   auto r = getRoute(line[i].coord, line[i+1].coord);
+                   if(r->costs != costs[i] || r->route != polygons[i])
+                   {
+                    qDebug()<<"geoJson reconstruction error";
+                   }
+                 */
+                routingCache[start_key][end_key] = routing_cache_item_t{polygons[i], costs[i]};
+            }
+            points.clear();
+            endOfSection = false;
+        }
     }
 }
 
@@ -265,16 +326,20 @@ const CRouterOptimization::routing_cache_item_t* CRouterOptimization::getRoute(c
             return nullptr;
         }
         routingCache[start_key][end_key] = cacheItem;
-
-        qreal airToCostFactor = cacheItem.costs/GPS_Math_DistanceQuick(start.x(), end.x(), start.y(), end.y());
-        if( airToCostFactor < minAirToCostFactor || minAirToCostFactor < 0)
-        {
-            minAirToCostFactor = airToCostFactor;
-        }
-        totalAirToCosts += airToCostFactor;
-        totalNumOfRoutes++;
+        updateStats(start, end, cacheItem.costs);
     }
     return &routingCache[start_key][end_key];
+}
+
+void CRouterOptimization::updateStats(const QPointF& start, const QPointF& end, qreal costs)
+{
+    qreal airToCostFactor = costs/GPS_Math_DistanceQuick(start.x(), end.x(), start.y(), end.y());
+    if( airToCostFactor < minAirToCostFactor || minAirToCostFactor < 0)
+    {
+        minAirToCostFactor = airToCostFactor;
+    }
+    totalAirToCosts += airToCostFactor;
+    totalNumOfRoutes++;
 }
 
 int CRouterOptimization::fillSubPts(SGisLine &line)

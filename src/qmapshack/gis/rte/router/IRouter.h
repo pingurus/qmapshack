@@ -31,6 +31,7 @@ public:
 
     virtual void calcRoute(const IGisItem::key_t& key) = 0;
     virtual int calcRoute(const QPointF& p1, const QPointF& p2, QPolygonF& coords, qreal* costs = nullptr) = 0;
+    virtual int calcRoute(const QVector<QPointF>& points, QVector<QPolygonF>& coords, QVector<qreal>&costs);
     virtual bool hasFastRouting()
     {
         return fastRouting;

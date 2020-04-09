@@ -95,6 +95,17 @@ int CRouterSetup::calcRoute(const QPointF& p1, const QPointF& p2, QPolygonF& coo
     return false;
 }
 
+int CRouterSetup::calcRoute(const QVector<QPointF> &points, QVector<QPolygonF> &coords, QVector<qreal> &costs)
+{
+    IRouter * router = dynamic_cast<IRouter*>(stackedWidget->currentWidget());
+    if(router)
+    {
+        return router->calcRoute(points, coords, costs);
+    }
+
+    return false;
+}
+
 QString CRouterSetup::getOptions()
 {
     IRouter * router = dynamic_cast<IRouter*>(stackedWidget->currentWidget());

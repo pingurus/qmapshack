@@ -1,6 +1,7 @@
 /**********************************************************************************************
     Copyright (C) 2014 Oliver Eichler oliver.eichler@gmx.de
     Copyright (C) 2017 Norbert Truchsess norbert.truchsess@t-online.de
+    Copyright (C) 2020 Henri Hornburg hrnbg@t-online.de
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -27,6 +28,7 @@
 #include "gis/rte/router/brouter/CRouterBRouterSetupWizard.h"
 #include "gis/rte/router/CRouterBRouter.h"
 #include "gis/wpt/CGisItemWpt.h"
+#include "GeoMath.h"
 #include "helpers/CProgressDialog.h"
 #include "helpers/CSettings.h"
 #include <QtNetwork>
@@ -219,7 +221,7 @@ bool CRouterBRouter::hasFastRouting()
     return setup->installMode == CRouterBRouterSetup::eModeLocal && checkFastRecalc->isChecked();
 }
 
-QNetworkRequest CRouterBRouter::getRequest(const QVector<QPointF> &routePoints, const QList<IGisItem*> &nogos) const
+QNetworkRequest CRouterBRouter::getRequest(const QVector<QPointF> &routePoints, const QList<IGisItem*> &nogos, CRouterBRouter::brouter_formats_e format) const
 {
     QString lonLats;
 
@@ -265,7 +267,7 @@ QNetworkRequest CRouterBRouter::getRequest(const QVector<QPointF> &routePoints, 
             QPolygonF polygon;
             line->getPolylineDegFromData(polygon);
             QString nogoPoints;
-            for (const QPointF point : polygon)
+            for (const QPointF& point : polygon)
             {
                 if (!nogoPoints.isEmpty())
                 {
@@ -315,8 +317,15 @@ QNetworkRequest CRouterBRouter::getRequest(const QVector<QPointF> &routePoints, 
     }
     urlQuery.addQueryItem("profile", comboProfile->currentData().toString());
     urlQuery.addQueryItem("alternativeidx", comboAlternative->currentData().toString());
-    urlQuery.addQueryItem("format", "gpx");
-
+    if(format == eBrouterFormatGeoJson)
+    {
+        urlQuery.addQueryItem("format", "geojson");
+        urlQuery.addQueryItem("exportWaypoints", "1");
+    }
+    else
+    {
+        urlQuery.addQueryItem("format", "gpx");
+    }
     QUrl url = setup->getServiceUrl();
     url.setQuery(urlQuery);
 
@@ -338,7 +347,26 @@ int CRouterBRouter::calcRoute(const QPointF& p1, const QPointF& p2, QPolygonF& c
     return synchronousRequest(points, nogos, coords, costs);
 }
 
-int CRouterBRouter::synchronousRequest(const QVector<QPointF> &points, const QList<IGisItem *> &nogos, QPolygonF &coords, qreal* costs = nullptr)
+int CRouterBRouter::calcRoute(const QVector<QPointF>& points, QVector<QPolygonF>& coords, QVector<qreal>&costs)
+{
+    if(!hasFastRouting())
+    {
+        return -1;
+    }
+
+    QVector<QPointF> points_deg;
+    for(const QPointF& point: points)
+    {
+        points_deg.append(point*RAD_TO_DEG);
+    }
+
+    QList<IGisItem*> nogos;
+    CGisWorkspace::self().getNogoAreas(nogos);
+
+    return synchronousRequest(points_deg, nogos, coords, costs);
+}
+
+int CRouterBRouter::synchronousRequest(const QVector<QPointF> &points, const QList<IGisItem *> &nogos, QByteArray &response, CRouterBRouter::brouter_formats_e format)
 {
     if (!mutex.tryLock())
     {
@@ -353,92 +381,106 @@ int CRouterBRouter::synchronousRequest(const QVector<QPointF> &points, const QLi
 
     synchronous = true;
 
-    QNetworkReply * reply = networkAccessManager->get(getRequest(points, nogos));
+    QNetworkReply * reply = networkAccessManager->get(getRequest(points, nogos, format));
+
+    reply->setProperty("options", getOptions());
+    reply->setProperty("time", QDateTime::currentDateTimeUtc().toMSecsSinceEpoch());
+
+    CProgressDialog progress(tr("Calculate route with %1").arg(getOptions()), 0, NOINT, nullptr);
+
+    QEventLoop eventLoop;
+    connect(&progress, &CProgressDialog::rejected, reply, &QNetworkReply::abort);
+    connect(reply, &QNetworkReply::finished, &eventLoop, &QEventLoop::quit);
+    //Processing userinputevents in local eventloop would cause a SEGV when clicking 'abort' of calling LineOp
+    eventLoop.exec(QEventLoop::ExcludeUserInputEvents);
+
+    const QNetworkReply::NetworkError& netErr = reply->error();
+    if (netErr == QNetworkReply::RemoteHostClosedError && nogos.size() > 1 && !isMinimumVersion(1, 4, 10))
+    {
+        throw tr("this version of BRouter does not support more then 1 nogo-area");
+    }
+    else if(netErr != QNetworkReply::NoError)
+    {
+        throw reply->errorString();
+    }
+    else
+    {
+        slotClearError();
+
+        response = reply->readAll();
+
+        if(response.isEmpty())
+        {
+            throw tr("response is empty");
+        }
+    }
+
+
+    reply->deleteLater();
+    slotCloseStatusMsg();
+    mutex.unlock();
+
+    return 0;
+}
+
+int CRouterBRouter::synchronousRequest(const QVector<QPointF> &points, const QList<IGisItem *> &nogos, QPolygonF &coords, qreal* costs)
+{
+    QByteArray res;
+    if(synchronousRequest(points, nogos, res) == -1)
+    {
+        return -1;
+    }
 
     try
     {
-        reply->setProperty("options", getOptions());
-        reply->setProperty("time", QDateTime::currentDateTimeUtc().toMSecsSinceEpoch());
+        QDomDocument xml;
+        xml.setContent(res);
 
-        CProgressDialog progress(tr("Calculate route with %1").arg(getOptions()), 0, NOINT, nullptr);
-
-        QEventLoop eventLoop;
-        connect(&progress, &CProgressDialog::rejected, reply, &QNetworkReply::abort);
-        connect(reply, &QNetworkReply::finished, &eventLoop, &QEventLoop::quit);
-        //Processing userinputevents in local eventloop would cause a SEGV when clicking 'abort' of calling LineOp
-        eventLoop.exec(QEventLoop::ExcludeUserInputEvents);
-
-        const QNetworkReply::NetworkError& netErr = reply->error();
-        if (netErr == QNetworkReply::RemoteHostClosedError && nogos.size() > 1 && !isMinimumVersion(1, 4, 10))
+        const QDomElement &xmlGpx = xml.documentElement();
+        if(xmlGpx.isNull() || xmlGpx.tagName() != "gpx")
         {
-            throw tr("this version of BRouter does not support more then 1 nogo-area");
-        }
-        else if(netErr != QNetworkReply::NoError)
-        {
-            throw reply->errorString();
+            throw QString(res);
         }
         else
         {
-            slotClearError();
+            setup->parseBRouterVersion(xmlGpx.attribute("creator"));
 
-            const QByteArray &res = reply->readAll();
-
-            if(res.isEmpty())
+            // read the shape
+            const QDomNodeList &xmlLatLng = xmlGpx.firstChildElement("trk")
+                                            .firstChildElement("trkseg")
+                                            .elementsByTagName("trkpt");
+            for(int n = 0; n < xmlLatLng.size(); n++)
             {
-                throw tr("response is empty");
+                const QDomElement &elem   = xmlLatLng.item(n).toElement();
+                coords << QPointF();
+                QPointF &point = coords.last();
+                point.setX(elem.attribute("lon").toFloat()*DEG_TO_RAD);
+                point.setY(elem.attribute("lat").toFloat()*DEG_TO_RAD);
             }
-            else
+
+            //find costs of route (copied and adapted from CGisItemRte::setResultFromBrouter)
+            if(costs != nullptr)
             {
-                QDomDocument xml;
-                xml.setContent(res);
-
-                const QDomElement &xmlGpx = xml.documentElement();
-                if(xmlGpx.isNull() || xmlGpx.tagName() != "gpx")
+                const QDomNodeList &nodes = xml.childNodes();
+                for (int i = 0; i < nodes.count(); i++)
                 {
-                    throw QString(res);
-                }
-                else
-                {
-                    setup->parseBRouterVersion(xmlGpx.attribute("creator"));
-
-                    // read the shape
-                    const QDomNodeList &xmlLatLng = xmlGpx.firstChildElement("trk")
-                                                    .firstChildElement("trkseg")
-                                                    .elementsByTagName("trkpt");
-                    for(int n = 0; n < xmlLatLng.size(); n++)
+                    const QDomNode &node = nodes.at(i);
+                    if (node.isComment())
                     {
-                        const QDomElement &elem   = xmlLatLng.item(n).toElement();
-                        coords << QPointF();
-                        QPointF &point = coords.last();
-                        point.setX(elem.attribute("lon").toFloat()*DEG_TO_RAD);
-                        point.setY(elem.attribute("lat").toFloat()*DEG_TO_RAD);
-                    }
-
-                    //find costs of route (copied and adapted from CGisItemRte::setResultFromBrouter)
-                    if(costs != nullptr)
-                    {
-                        const QDomNodeList &nodes = xml.childNodes();
-                        for (int i = 0; i < nodes.count(); i++)
+                        const QString &commentTxt = node.toComment().data();
+                        // ' track-length = 180864 filtered ascend = 428 plain-ascend = -172 cost=270249 '
+                        const QRegExp rxAscDes("(\\s*track-length\\s*=\\s*)(-?\\d+)(\\s*)(filtered ascend\\s*=\\s*-?\\d+)(\\s*)(plain-ascend\\s*=\\s*-?\\d+)(\\s*)(cost\\s*=\\s*)(-?\\d+)(\\s*)");
+                        int pos = rxAscDes.indexIn(commentTxt);
+                        if (pos > -1)
                         {
-                            const QDomNode &node = nodes.at(i);
-                            if (node.isComment())
+                            bool ok;
+                            *costs = rxAscDes.cap(9).toDouble(&ok);
+                            if(!ok)
                             {
-                                const QString &commentTxt = node.toComment().data();
-                                // ' track-length = 180864 filtered ascend = 428 plain-ascend = -172 cost=270249 '
-                                const QRegExp rxAscDes("(\\s*track-length\\s*=\\s*)(-?\\d+)(\\s*)(filtered ascend\\s*=\\s*-?\\d+)(\\s*)(plain-ascend\\s*=\\s*-?\\d+)(\\s*)(cost\\s*=\\s*)(-?\\d+)(\\s*)");
-                                int pos = rxAscDes.indexIn(commentTxt);
-                                if (pos > -1)
-                                {
-                                    bool ok;
-                                    *costs = rxAscDes.cap(9).toDouble(&ok);
-                                    if(!ok)
-                                    {
-                                        *costs = -1;
-                                    }
-                                }
-                                break;
+                                *costs = -1;
                             }
                         }
+                        break;
                     }
                 }
             }
@@ -449,18 +491,172 @@ int CRouterBRouter::synchronousRequest(const QVector<QPointF> &points, const QLi
         coords.clear();
         if(!msg.isEmpty())
         {
-            reply->deleteLater();
             mutex.unlock();
             throw tr("Bad response from server: %1").arg(msg);
         }
     }
 
-    reply->deleteLater();
-    slotCloseStatusMsg();
-    mutex.unlock();
     return coords.size();
 }
+int CRouterBRouter::synchronousRequest(const QVector<QPointF> &points, const QList<IGisItem *> &nogos, QVector<QPolygonF> &coords, QVector<qreal> &costs)
+{
+    QByteArray res;
+    if(synchronousRequest(points, nogos, res, eBrouterFormatGeoJson) == -1)
+    {
+        return -1;
+    }
 
+    try
+    {
+        const QRegExp rxCosts("\\[\"(\\d+)\", \"(\\d+)\", \"\\d+\", \"(\\d+)\", \"(\\d+)\", \"(\\d+)\", \"(\\d+)\", \"(\\d+)\", \"(\\d+)\",");
+        QVector<std::tuple<QPointF, qreal, QPolygonF, qreal> > segments;
+        int pos = 0;
+        while ((pos = rxCosts.indexIn(res, pos)) != -1)
+        {
+            pos += rxCosts.matchedLength();
+            qreal lon = rxCosts.cap(1).toDouble()/1000000;
+            qreal lat = rxCosts.cap(2).toDouble()/1000000;
+            qreal dist = rxCosts.cap(3).toDouble();
+            qreal costPerKm = rxCosts.cap(4).toDouble();
+            qreal elevCost = rxCosts.cap(5).toDouble();
+            qreal turnCost = rxCosts.cap(6).toDouble();
+            qreal nodeCost = rxCosts.cap(7).toDouble();
+            qreal initialCost = rxCosts.cap(8).toDouble();
+            segments.append(std::tuple<QPointF, qreal, QPolygonF, qreal>(QPointF(lon*DEG_TO_RAD, lat*DEG_TO_RAD),
+                                                                         dist/1000*costPerKm+elevCost+turnCost+nodeCost+initialCost,
+                                                                         QPolygonF(),
+                                                                         dist));
+        }
+
+        const QRegExp rxPoints("\\[(\\d+\\.\\d+), (\\d+\\.\\d+), \\d+\\.\\d+\\]");
+        QVector<QPointF> subPoints;
+        pos = 0;
+        while((pos = rxPoints.indexIn(res, pos)) != -1)
+        {
+            pos += rxPoints.matchedLength();
+            subPoints.append(QPointF(rxPoints.cap(1).toDouble()*DEG_TO_RAD, rxPoints.cap(2).toDouble()*DEG_TO_RAD));
+        }
+
+        if(subPoints.isEmpty() || segments.isEmpty())
+        {
+            throw QString(res);
+        }
+
+        {//Add scope to prevent human mistakes due to segmentIndex variable being defined
+            int segmentIndex = 0;
+            //Attach subPoints to their segments
+            for(int i = 0; i < subPoints.length(); i++)
+            {
+                std::get<2>(segments[segmentIndex]).append(subPoints[i]);
+                //At dead ends for some reason the coordinates of the segment don't match any of the subpoints
+                //The coordinate at the segment marks the end of this segment
+                if((std::abs(std::get<0>(segments[segmentIndex]).x() - subPoints[i].x()) < 0.000001 * DEG_TO_RAD &&
+                    std::abs(std::get<0>(segments[segmentIndex]).y() - subPoints[i].y()) < 0.000001 * DEG_TO_RAD) ||
+                   (i < subPoints.length()-1 && i > 1 && subPoints[i-1] == subPoints [i+1]))
+                {
+                    segmentIndex++;
+                }
+            }
+        }
+
+        int lastMinDistSegEndIndex = -1;
+        int lastminDistSubPointIndex = -1;
+        //Find Polygons and costs for partial routes
+        for(int i = 0; i < points.length()-1; i++)
+        {
+            qreal minDist = -1;
+            int minDistSegEndIndex = 0;
+            for(int segmentIndex = lastMinDistSegEndIndex + 1; segmentIndex < segments.length(); segmentIndex++)
+            {
+                qreal dist = GPS_Math_DistanceQuick(points[i+1].x()*DEG_TO_RAD, points[i+1].y()*DEG_TO_RAD, std::get<0>(segments[segmentIndex]).x(), std::get<0>(segments[segmentIndex]).y());
+                if(minDist < 0 || dist < minDist)
+                {
+                    minDist = dist;
+                    minDistSegEndIndex = segmentIndex;
+                }
+            }
+
+            //The current minimal distance is that to the endpoint of the chosen segment
+            int minDistSubPointIndex = std::get<2>(segments[minDistSegEndIndex]).length() - 1;
+            {
+                int newMinDistSegEndIndex = minDistSegEndIndex;
+                for(int adjacent = 0; adjacent < 2; adjacent++)
+                {
+                    if(minDistSegEndIndex+adjacent < segments.length())
+                    {
+                        for(int subPointIndex = 0; subPointIndex < std::get<2>(segments[minDistSegEndIndex+adjacent]).length(); subPointIndex++)
+                        {
+                            QPointF subPoint = std::get<2>(segments[minDistSegEndIndex+adjacent])[subPointIndex];
+                            qreal dist = GPS_Math_DistanceQuick(points[i+1].x()*DEG_TO_RAD, points[i+1].y()*DEG_TO_RAD,
+                                                                subPoint.x(), subPoint.y());
+                            if(dist < minDist)
+                            {
+                                minDist = dist;
+                                newMinDistSegEndIndex = minDistSegEndIndex+adjacent;
+                                minDistSubPointIndex = subPointIndex;
+                            }
+                        }
+                    }
+                }
+                minDistSegEndIndex = newMinDistSegEndIndex;
+            }
+
+            qreal cost = 0;
+            QPolygonF poly;
+
+            if(lastMinDistSegEndIndex >= 0 &&  lastminDistSubPointIndex+1 < std::get<2>(segments[lastMinDistSegEndIndex]).length())
+            {
+                QPointF lastPoint = std::get<2>(segments[lastMinDistSegEndIndex])[lastminDistSubPointIndex+1];
+                qreal dist = 0;
+                for(int subPointIndex = lastminDistSubPointIndex+1; subPointIndex < std::get<2>(segments[lastMinDistSegEndIndex]).length(); subPointIndex++)
+                {
+                    QPointF thisPoint = std::get<2>(segments[lastMinDistSegEndIndex])[subPointIndex];
+                    dist+=GPS_Math_DistanceQuick(thisPoint.x(), thisPoint.y(), lastPoint.x(), lastPoint.y());
+                    poly.append(thisPoint);
+                    lastPoint=thisPoint;
+                }
+                cost += std::get<1>(segments[lastMinDistSegEndIndex])*dist/std::get<3>(segments[lastMinDistSegEndIndex]);
+            }
+
+            for(int segmentIndex = lastMinDistSegEndIndex+1; segmentIndex < minDistSegEndIndex; segmentIndex++)
+            {
+                cost += std::get<1>(segments[segmentIndex]);
+                poly.append(std::get<2>(segments[segmentIndex]));
+            }
+
+            QPointF lastPoint = std::get<2>(segments[minDistSegEndIndex])[0];
+            qreal dist = 0;
+            for(int subPointIndex = 0; subPointIndex <= minDistSubPointIndex; subPointIndex++)
+            {
+                QPointF thisPoint = std::get<2>(segments[minDistSegEndIndex])[subPointIndex];
+                dist+=GPS_Math_DistanceQuick(thisPoint.x(), thisPoint.y(), lastPoint.x(), lastPoint.y());
+                poly.append(thisPoint);
+                lastPoint=thisPoint;
+            }
+            cost += std::get<1>(segments[minDistSegEndIndex])*dist/std::get<3>(segments[minDistSegEndIndex]);
+            lastMinDistSegEndIndex = minDistSegEndIndex;
+
+            if(poly.length() < 2)
+            {
+                qDebug()<<"Very short path in fetching multiple routes at once";
+            }
+            //Add the subroute to the vectors provided
+            coords.append(poly);
+            costs.append(cost);
+        }
+    }
+    catch(const QString& msg)
+    {
+        coords.clear();
+        if(!msg.isEmpty())
+        {
+            mutex.unlock();
+            throw tr("Bad response from server: %1").arg(msg);
+        }
+    }
+
+    return coords.size();
+}
 void CRouterBRouter::calcRoute(const IGisItem::key_t& key)
 {
     mutex.lock();

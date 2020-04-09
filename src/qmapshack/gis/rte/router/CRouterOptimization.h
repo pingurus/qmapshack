@@ -40,7 +40,9 @@ private:
     qreal createNextBestOrder(const SGisLine& oldOrder, SGisLine& newOrder);
     qreal getRealRouteCosts(const SGisLine& line);
     qreal bestKnownDistance(const IGisLine::point_t &start, const IGisLine::point_t &end);
+    void fastLoadToCache(const SGisLine& line);
     const routing_cache_item_t *getRoute(const QPointF& from, const QPointF& to);
+    void updateStats(const QPointF &start, const QPointF &end, qreal costs);
     int fillSubPts(SGisLine& line);
     /// checks if router settings were changed and if yes, discards the routingCache
     void checkRouter();
