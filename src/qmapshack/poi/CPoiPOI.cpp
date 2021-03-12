@@ -43,6 +43,38 @@ CPoiPOI::CPoiPOI(const QString &filename, CPoiDraw *parent)
     loadTimer->setSingleShot(true);
     loadTimer->setInterval(500);
     connect(loadTimer, &QTimer::timeout, poi, &CPoiDraw::emitSigCanvasUpdate);
+
+    // Open database here so it belongs to the right thread
+    if(!QSqlDatabase::contains(filename + "_bbox"))
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", filename + "_bbox");
+        db.setDatabaseName(filename);
+        if(!db.open())
+        {
+            qDebug() << "failed to open database" << db.lastError();
+            isActivated = false;
+            return;
+        }
+    }
+
+    QSqlQuery query("SELECT value FROM main.metadata WHERE name='bounds'", QSqlDatabase::database(filename + "_bbox"));
+
+    if(query.next())
+    {
+        const QStringList& corners = query.value(0).toString().split(",");
+        qreal top = corners[2].toDouble();
+        qreal left = corners[1].toDouble();
+        qreal width = corners[3].toDouble() - left;
+        qreal height = corners[0].toDouble() - top;
+        bbox = QRectF(left, top, width, height);
+    }
+    else
+    {
+        qDebug() << "failed to retreive bounding box of " << filename;
+        isActivated = false;
+    }
+    //Database is no longer needed
+    QSqlDatabase::removeDatabase(filename + "_bbox");
 }
 
 
@@ -417,6 +449,20 @@ bool CPoiPOI::getPoiGroupCloseBy(const QPoint &px, CPoiPOI::poiGroup_t &poiItem)
 
 void CPoiPOI::loadPOIsFromFile(quint64 categoryID, int minLonM10, int minLatM10)
 {
+    qreal maxLat = (minLatM10 + 1) / 10.;
+    qreal minLat = minLatM10 / 10.;
+    qreal maxLon = (minLonM10 + 1) / 10.;
+    qreal minLon = minLonM10 / 10.;
+
+    if(minLat > bbox.top() ||
+       maxLat < bbox.bottom() ||
+       minLon > bbox.right() ||
+       maxLon < bbox.left())
+    {
+        //No POIs will be found anyway
+        return;
+    }
+
     //Open Database here so it is owned by the right thread
     if(!QSqlDatabase::contains(filename))
     {
