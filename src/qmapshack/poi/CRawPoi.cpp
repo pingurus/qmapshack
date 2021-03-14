@@ -74,7 +74,86 @@ poi_t CRawPoi::toPoi() const
     poi_t poi;
     poi.pos = coordinates;
     poi.name = getName();
-    poi.desc = data.join("<br>\n");
+
+    const QRegularExpression emailRegex ("(contact:email)=(.+)", QRegularExpression::UseUnicodePropertiesOption);
+    const QRegularExpression phoneRegex ("(contact:phone|phone|contact:mobile)=(.+)", QRegularExpression::UseUnicodePropertiesOption);
+    const QRegularExpression websiteRegex ("(contact:website|website|url)=(.+)", QRegularExpression::UseUnicodePropertiesOption);
+    const QRegularExpression osmRegex ("(osm_id)=(P|W|R)/(.+)", QRegularExpression::UseUnicodePropertiesOption);
+    const QRegularExpression wikipediaRegex ("(.*:)?(wikipedia)(:[A-z]{2})?=(.+)", QRegularExpression::UseUnicodePropertiesOption);
+    const QRegularExpression wikidataRegex ("(.*:)?(wikidata)=(.+)", QRegularExpression::UseUnicodePropertiesOption);
+    poi.desc = "";
+    bool firstLine = true;
+    for(QString line : data)
+    {
+        if(firstLine)
+        {
+            firstLine = false;
+        }
+        else
+        {
+            poi.desc += "<br>\n";
+        }
+
+        QRegularExpressionMatch emailMatch = emailRegex.match(line);
+        if(emailMatch.hasMatch())
+        {
+            poi.desc += emailMatch.captured(1).trimmed() + "=<a href=\"mailto:" + emailMatch.captured(2).trimmed() + "\">" + emailMatch.captured(2).trimmed() + "</a>";
+            continue;
+        }
+        QRegularExpressionMatch phoneMatch = phoneRegex.match(line);
+        if(phoneMatch.hasMatch())
+        {
+            poi.desc += phoneMatch.captured(1).trimmed() + "=<a href=\"tel:" + phoneMatch.captured(2).trimmed() + "\">" + phoneMatch.captured(2).trimmed() + "</a>";
+            continue;
+        }
+        QRegularExpressionMatch websiteMatch = websiteRegex.match(line);
+        if(websiteMatch.hasMatch())
+        {
+            poi.desc += websiteMatch.captured(1).trimmed() + "=<a href=\"" + websiteMatch.captured(2).trimmed() + "\">" + websiteMatch.captured(2).trimmed() + "</a>";
+            continue;
+        }
+        QRegularExpressionMatch osmMatch = osmRegex.match(line);
+        if(osmMatch.hasMatch())
+        {
+            poi.desc += osmMatch.captured(1).trimmed() + "=<a href=\"https://www.openstreetmap.org/";
+            if(osmMatch.captured(2) == "P")
+            {
+                poi.desc += "node/";
+            }
+            else if(osmMatch.captured(2) == "W")
+            {
+                poi.desc += "way/";
+            }
+            else
+            {
+                poi.desc += "relation/";
+            }
+            poi.desc += osmMatch.captured(3).trimmed() + "\">" + osmMatch.captured(3).trimmed() + "</a>";
+            continue;
+        }
+        QRegularExpressionMatch wikipediaMatch = wikipediaRegex.match(line);
+        if(wikipediaMatch.hasMatch())
+        {
+            poi.desc += wikipediaMatch.captured(1) + wikipediaMatch.captured(2) + wikipediaMatch.captured(3);
+            if(wikipediaMatch.captured(3).isEmpty())
+            {
+                poi.desc += "=<a href=\"https://wikipedia.org/wiki/";
+            }
+            else
+            {
+                poi.desc += "=<a href=\"https://" + wikipediaMatch.captured(3).remove(0, 1) + ".wikipedia.org/wiki/";
+            }
+            poi.desc += wikipediaMatch.captured(4).trimmed() + "\">" + wikipediaMatch.captured(4).trimmed() + "</a>";
+            continue;
+        }
+        QRegularExpressionMatch wikidataMatch = wikidataRegex.match(line);
+        if(wikidataMatch.hasMatch())
+        {
+            poi.desc += wikidataMatch.captured(1) + wikidataMatch.captured(2) + "=<a href=\"https://wikidata.org/wiki/" + wikidataMatch.captured(3).trimmed() + "\">" + wikidataMatch.captured(3).trimmed() + "</a>";
+            continue;
+        }
+        poi.desc += line;
+    }
     return poi;
 }
 
